@@ -51,18 +51,30 @@ export class RazorpayProvider implements PaymentProvider {
   }
 
   async createQr(input: CreateQrInput): Promise<CreateQrResult> {
-    // Razorpay requires close_by to be some minutes in the future; keep at least 3 min.
-    const closeBy = Math.max(Math.floor(input.expiresAt.getTime() / 1000), Math.floor(Date.now() / 1000) + 180);
-    const qr = await this.call('POST', '/payments/qr_codes', {
+    // Razorpay's docs disagree on the minimum close_by (2 min on the create page, 15 min elsewhere).
+    // Ask for our own expiry (at least 3 min out); if Razorpay rejects close_by, retry once with 16 min.
+    // The kiosk still enforces its own shorter TTL and closes the QR via closeQr() when it expires.
+    const nowS = Math.floor(Date.now() / 1000);
+    const closeBy = Math.max(Math.floor(input.expiresAt.getTime() / 1000), nowS + 180);
+    const body = (close_by: number) => ({
       type: 'upi_qr',
       name: input.payeeName.slice(0, 40),
       usage: 'single_use',
       fixed_amount: true,
       payment_amount: input.amountPaise,
       description: input.description.slice(0, 100),
-      close_by: closeBy,
+      close_by,
       notes: { attempt_ref: input.attemptRef, order_number: input.orderNumber },
     });
+    let qr: any;
+    try {
+      qr = await this.call('POST', '/payments/qr_codes', body(closeBy));
+    } catch (e) {
+      if (!(e instanceof ProviderUnavailableError) && /close_by|close by/i.test((e as Error).message)) {
+        qr = await this.call('POST', '/payments/qr_codes', body(nowS + 16 * 60));
+      } else throw e;
+    }
+    // Razorpay returns only image_url (a hosted QR image), so the kiosk shows that image.
     return { providerOrderRef: qr.id, qrPayload: qr.image_content ?? null, qrImageUrl: qr.image_url ?? null };
   }
 

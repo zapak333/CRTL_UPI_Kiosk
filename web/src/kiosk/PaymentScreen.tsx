@@ -142,7 +142,7 @@ export function PaymentScreen({ order, testMode, onUpdate, onPaid, onCancelled }
                 <span className="h-4 w-4 animate-ping rounded-full bg-orange-500" /> Waiting for payment
               </div>
               <div className="relative mt-5 rounded-3xl border-8 border-slate-100 p-3">
-                {p.qrDataUrl ? <img src={p.qrDataUrl} alt="UPI QR code" className="h-80 w-80" /> : p.qrImageUrl ? <img src={p.qrImageUrl} alt="UPI QR code" className="h-80 w-80" /> : <div className="flex h-80 w-80 items-center justify-center text-slate-400">Generating QR…</div>}
+                {p.qrDataUrl ? <img src={p.qrDataUrl} alt="UPI QR code" className="h-80 w-80" /> : p.qrImageUrl ? <img src={p.qrImageUrl} alt="UPI QR code" className="h-80 w-80 bg-white object-contain" /> : <div className="flex h-80 w-80 items-center justify-center text-slate-400">Generating QR…</div>}
               </div>
               <div className="mt-4 text-xl text-slate-600">
                 Scan to pay <b className="text-navy-800">{inr(p.amount)}</b> · QR valid for <b className="tabular-nums">{mm}:{ss}</b>

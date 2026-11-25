@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { config } from '../src/config.js';
 import { RazorpayProvider } from '../src/services/payments/razorpay.js';
 
@@ -41,5 +41,26 @@ describe('Razorpay adapter (offline)', () => {
   it('does not treat an uncaptured credit as success and ignores unrelated events', () => {
     expect(p.parseWebhook(qrCredited('authorized'), {})!.status).toBe('PENDING');
     expect(p.parseWebhook({ event: 'order.paid', payload: {} }, {})).toBeNull();
+  });
+
+  it('retries QR creation with a later close_by when Razorpay rejects the first one', async () => {
+    (config.payment as any).razorpayKeyId = 'rzp_test_dummy';
+    (config.payment as any).razorpayKeySecret = 'dummy';
+    const bodies: any[] = [];
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_u: any, init: any) => {
+      bodies.push(JSON.parse(init.body));
+      if (bodies.length === 1) return new Response(JSON.stringify({ error: { code: 'BAD_REQUEST_ERROR', description: 'close_by should be at least 15 minutes after current time' } }), { status: 400 });
+      return new Response(JSON.stringify({ id: 'qr_X', image_url: 'https://rzp.io/i/abc', status: 'active' }), { status: 200 });
+    });
+    try {
+      const r = await p.createQr({ attemptRef: 'A1', amountPaise: 100, orderNumber: 'O1', description: 'd', payeeName: 'n', expiresAt: new Date(Date.now() + 5 * 60_000) });
+      expect(r).toEqual({ providerOrderRef: 'qr_X', qrPayload: null, qrImageUrl: 'https://rzp.io/i/abc' });
+      expect(bodies).toHaveLength(2);
+      expect(bodies[1].close_by - Math.floor(Date.now() / 1000)).toBeGreaterThanOrEqual(15 * 60);
+    } finally {
+      fetchMock.mockRestore();
+      (config.payment as any).razorpayKeyId = '';
+      (config.payment as any).razorpayKeySecret = '';
+    }
   });
 });
