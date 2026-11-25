@@ -5,3 +5,4 @@ server/.env
 .env
 *.log
 web/test-results/
+build/

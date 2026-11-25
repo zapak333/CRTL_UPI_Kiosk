@@ -1,0 +1,109 @@
+name: Windows installer
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # to publish the installer as a GitHub release
+
+concurrency:
+  group: windows-installer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Cache downloads (Node, PostgreSQL, WinSW, VC++ runtime)
+        uses: actions/cache@v4
+        with:
+          path: build/downloads
+          key: win-downloads-v1-${{ hashFiles('packaging/windows/build.ps1') }}
+
+      - name: Build installer
+        id: build
+        shell: pwsh
+        run: ./packaging/windows/build.ps1
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: CRTL-Kiosk-Setup-${{ steps.build.outputs.version }}
+          path: ${{ steps.build.outputs.installer }}
+          compression-level: 0
+          retention-days: 30
+
+      # Install it on this clean Windows VM exactly like a user would (silently), then check it works.
+      - name: Test install
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath '${{ steps.build.outputs.installer }}' -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/LOG=install-test.log' -Wait -PassThru
+          Write-Host "installer exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { throw 'installer failed' }
+          Get-Service CRTLKioskDB, CRTLKioskServer | Format-Table Name, Status, StartType
+          $h = Invoke-RestMethod http://localhost:8080/api/health
+          $h | ConvertTo-Json
+          if (-not $h.ok) { throw 'health check failed' }
+          $kiosk = Invoke-WebRequest http://localhost:8080/kiosk -UseBasicParsing
+          if ($kiosk.StatusCode -ne 200 -or $kiosk.Content -notmatch '<div id="root">') { throw '/kiosk did not serve the app' }
+          $s = Invoke-RestMethod http://localhost:8080/api/admin/auth/setup/status
+          if (-not $s.needsSetup) { throw 'expected first-admin setup to be pending' }
+          $menu = Invoke-WebRequest http://localhost:8080/api/kiosk/menu -UseBasicParsing
+          Write-Host "kiosk menu API: $($menu.StatusCode)"
+          # .env must not be readable by normal users and must not contain a bundled key
+          $acl = (Get-Acl "$env:ProgramData\CRTLKiosk\.env").Access | ForEach-Object { $_.IdentityReference.Value }
+          Write-Host ".env ACL: $($acl -join ', ')"
+          if ($acl -match 'Users') { throw '.env is readable by Users' }
+
+      - name: Test upgrade (re-run installer over the existing install)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath '${{ steps.build.outputs.installer }}' -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/LOG=upgrade-test.log' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'upgrade failed' }
+          if (-not (Invoke-RestMethod http://localhost:8080/api/health).ok) { throw 'health check failed after upgrade' }
+
+      - name: Test uninstall
+        shell: pwsh
+        run: |
+          $u = Get-ChildItem "$env:ProgramFiles\CRTL Kiosk" -Filter 'unins*.exe' | Select-Object -First 1
+          $p = Start-Process -FilePath $u.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
+          Start-Sleep -Seconds 5
+          if (Get-Service CRTLKioskServer, CRTLKioskDB -ErrorAction SilentlyContinue) { throw 'services still registered after uninstall' }
+          if (-not (Test-Path "$env:ProgramData\CRTLKiosk\pgdata\PG_VERSION")) { throw 'uninstall should keep the data' }
+          Write-Host 'Uninstall OK, data kept'
+
+      - name: Logs
+        if: always()
+        shell: pwsh
+        run: |
+          foreach ($f in 'install-test.log', 'upgrade-test.log', "$env:ProgramData\CRTLKiosk\logs\install.log") { if (Test-Path $f) { Write-Host "===== $f"; Get-Content $f -Tail 80 } }
+          Get-ChildItem "$env:ProgramData\CRTLKiosk\logs" -Filter 'CRTLKioskServer*.log' -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "===== $($_.Name)"; Get-Content $_.FullName -Tail 60 }
+
+      # Downloadable from the repository's Releases page.
+      # Branch pushes update one "installer-preview" pre-release; v* tags make a normal release.
+      - name: Publish release
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $exe = '${{ steps.build.outputs.installer }}'
+          $notes = "Windows installer for CRTL Canteen Kiosk, built from ${{ github.ref_name }} at ${{ github.sha }}.`n`nDownload the .exe below and run it on a Windows 10/11 PC. Install steps: docs/WINDOWS_INSTALLER.md."
+          if ('${{ github.ref_type }}' -eq 'tag') {
+            gh release create '${{ github.ref_name }}' $exe --title 'CRTL Kiosk ${{ github.ref_name }}' --notes $notes
+          } else {
+            gh release delete installer-preview --yes --cleanup-tag 2>$null
+            $global:LASTEXITCODE = 0
+            gh release create installer-preview $exe --prerelease --target '${{ github.sha }}' --title 'CRTL Kiosk installer (preview ${{ steps.build.outputs.version }})' --notes $notes
+          }

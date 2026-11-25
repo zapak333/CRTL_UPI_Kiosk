@@ -5,7 +5,12 @@ import { adminApi } from '../../lib/api';
 
 export default function SetupPage() {
   const [needs, setNeeds] = useState<boolean | null>(null);
-  const [f, setF] = useState({ setupToken: '', username: '', fullName: '', password: '', confirm: '' });
+  // The Windows installer opens /admin/setup#token=… so the one-time token is pre-filled.
+  // It is read from the URL fragment (never sent to the server or written to logs) and then removed.
+  const [f, setF] = useState(() => ({ setupToken: new URLSearchParams(window.location.hash.slice(1)).get('token') ?? '', username: '', fullName: '', password: '', confirm: '' }));
+  useEffect(() => {
+    if (window.location.hash) window.history.replaceState(null, '', window.location.pathname + window.location.search);
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   useEffect(() => {

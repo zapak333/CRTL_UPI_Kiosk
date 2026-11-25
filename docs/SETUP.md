@@ -51,6 +51,8 @@ On first start the console prints a **one-time setup token**. Open `http://SERVE
 enter the token and create the first (superadmin) account. Alternatively run `npm run create-admin`
 on the server console.
 
+> **Windows:** the easiest route is the one-file installer, see [WINDOWS_INSTALLER.md](WINDOWS_INSTALLER.md).
+
 ## 3. Keep it running
 
 **Linux (systemd)** – `/etc/systemd/system/crtl-kiosk.service`:
